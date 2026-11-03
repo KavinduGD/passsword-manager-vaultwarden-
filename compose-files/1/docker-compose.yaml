@@ -1,0 +1,83 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.37.5-alpine
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      # Domain settings
+      ## The domain must match the address from where you access the server
+      ## It's recommended to configure this value, otherwise certain functionality might not work,
+      ## like attachment downloads, email links and U2F.
+      ## For U2F to work, the server must use HTTPS, you can use Let's Encrypt for free certs
+      ## To use HTTPS, the recommended way is to put Vaultwarden behind a reverse proxy
+      DOMAIN: "https://vault.sri-lankan-parliment-shooter-mini-game.website"
+
+      ## Controls if new users can register
+      SIGNUPS_ALLOWED: "true"
+
+      ## Enable websocket notifications
+      ENABLE_WEBSOCKET: "true"
+
+      ## Token for the admin interface, preferably an Argon2 PCH string
+      ## Vaultwarden has a built-in generator by calling `vaultwarden hash`
+      ## For details see: https://github.com/dani-garcia/vaultwarden/wiki/Enabling-admin-page#secure-the-admin_token
+      ## If not set, the admin panel is disabled
+      ## New Argon2 PHC string
+      ## Note that for some environments, like docker-compose you need to escape all the dollar signs `$` with an extra dollar sign like `$$`
+      ## Also, use single quotes (') instead of double quotes (") to enclose the string when needed
+      ## Old plain text string (Will generate warnings in favor of Argon2)
+      ADMIN_TOKEN: "${ADMIN_TOKEN}"
+
+      ## Logging to file
+      LOG_FILE: "/data/vaultwarden.log"
+
+      ## Enable extended logging, which shows timestamps and targets in the logs
+      EXTENDED_LOGGING: "true"
+
+      ## Logging to Syslog
+      ## This requires extended logging
+      USE_SYSLOG: "true"
+
+      # Vaultwarden listens on port 80 inside its container.
+    volumes:
+      # Mount the persistent data directory to /data inside the container
+      - ./vw-data:/data
+      # required for syslog logging
+      - /dev/log:/dev/log
+    networks:
+      - vaultwarden-network
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: vaultwarden-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    depends_on:
+      - vaultwarden
+    networks:
+      - vaultwarden-network
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: vaultwarden-certbot
+    restart: unless-stopped
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    entrypoint: /bin/sh
+    command: >
+      -c 'trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot;
+        sleep 12h;
+      done'
+
+networks:
+  vaultwarden-network:
+    driver: bridge
