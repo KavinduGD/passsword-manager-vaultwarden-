@@ -18,7 +18,7 @@ There are basically three different ways to configure Vaultwarden:
 
 ---
 
-- **You can find a documented list of most configuration options in the .env.template file. Typically the commented values will indicate the default values but that is not a guarantee. In case it's not, the source of truth will be src/config.rs.**
+- **You can find a documented list of most configuration options in the .env.template file. Typically the commented values will indicate the default values but that is not a guarantee. In case it's not, the source of truth will be src/config.rs.** https://github.com/dani-garcia/vaultwarden/blob/main/src/config.rs
 - If you enable the admin page, you can also see the configuration options with the configured values (and if you are using config.json an indication whether the value has been changed from the initial value).
 - Be aware that the config.json file is NOT the recommended way to configure your settings! Either use environment variables which you can configure in several ways for your container environment (Docker, Docker-Compose, K8s etc..) Or, when using a standalone binary (not distributed by Vaultwarden itself) use a .env file located in your current working directory.
 - The settings in config.json will override any other configuration method and you will be warned on startup which settings have been overwritten by config.json.

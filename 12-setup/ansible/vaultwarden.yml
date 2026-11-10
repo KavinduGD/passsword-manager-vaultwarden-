@@ -1,0 +1,379 @@
+---
+# Deploy Vaultwarden in Docker and expose it through the existing MicroK8s Ingress.
+# Local secrets are loaded from .env in the same directory as this playbook.
+# If a local ./vw-data directory exists, its contents are migrated to the remote
+# Vaultwarden data directory before the container is started.
+
+- name: Deploy Vaultwarden behind the existing MicroK8s Ingress
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - vault-secrets.yml
+
+  vars:
+    # Deployment / networking
+    vaultwarden_domain: "vaultwarden.sri-lankan-parliment-shooter-mini-game.website"
+    vaultwarden_private_ip: "172.31.15.157"
+    vaultwarden_namespace: "vaultwarden"
+    vaultwarden_ingress_class: "public"
+    vaultwarden_cluster_issuer: "letsencrypt-issuer"
+    vaultwarden_tls_secret: "vaultwarden-tls"
+
+    # Remote paths and container settings
+    deployment_dir: "/opt/vaultwarden"
+    data_dir: "{{ deployment_dir }}/vw-data"
+
+    vaultwarden_image: "vaultwarden/server:1.37.5-alpine"
+    vaultwarden_uid: 1000
+    vaultwarden_gid: 1000
+    host_http_port: 8080
+    container_http_port: 80
+
+    # Local migration source (relative to this playbook)
+    local_data_dir: "{{ playbook_dir }}/vw-data"
+
+    # Let's Encrypt
+    letsencrypt_email: "kavidudharmasiri90@gmail.com"
+    letsencrypt_server: "https://acme-v02.api.letsencrypt.org/directory"
+
+    # SMTP defaults
+    smtp_host: "smtp.gmail.com"
+    smtp_port: "587"
+    smtp_security: "starttls"
+    smtp_from: "kavidudharmasiri90@gmail.com"
+    smtp_from_name: "Vaultwarden"
+    smtp_username: "kavidudharmasiri90@gmail.com"
+
+    # Vaultwarden feature settings
+    signups_allowed: "false"
+    invitations_allowed: "false"
+    enable_websocket: "true"
+    sso_enabled: "true"
+    sso_only: "true"
+    sso_signups_allowed: "true"
+    sso_signups_match_email: "true"
+    sso_allow_unknown_email_verification: "true"
+    sso_authority: "https://login.microsoftonline.com/02069dfb-a6ec-40f7-b2e2-c11c3ab010b5/v2.0"
+    sso_scopes: "openid profile email offline_access User.Read"
+
+    # Set false if Docker is already installed and you do not want apt to manage it.
+    install_docker_packages: true
+
+  tasks:
+    - name: Validate required deployment values
+      ansible.builtin.assert:
+        that:
+          - vaultwarden_domain | length > 0
+          - vaultwarden_private_ip | length > 0
+          - letsencrypt_email | length > 0
+          - smtp_from | length > 0
+          - smtp_from_name | length > 0
+          - smtp_username | length > 0
+        fail_msg: "Set the domain, private IP, Let's Encrypt email and SMTP sender settings."
+
+    - name: Check that MicroK8s is installed
+      ansible.builtin.command: microk8s kubectl version --client
+      register: microk8s_check
+      changed_when: false
+
+    - name: Check whether local vw-data directory exists
+      ansible.builtin.stat:
+        path: "{{ local_data_dir }}"
+      delegate_to: localhost
+      become: false
+      register: local_vw_data
+
+    - name: Create deployment and persistent data directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ vaultwarden_uid }}"
+        group: "{{ vaultwarden_gid }}"
+        mode: "0750"
+      loop:
+        - "{{ deployment_dir }}"
+        - "{{ data_dir }}"
+
+    # Protect an existing remote Vaultwarden database from accidental overwrite.
+    - name: Check existing remote Vaultwarden data before migration
+      ansible.builtin.find:
+        paths: "{{ data_dir }}"
+        recurse: true
+        hidden: true
+        file_type: any
+      register: remote_vw_data
+      when: local_vw_data.stat.exists and local_vw_data.stat.isdir
+
+    - name: Stop if remote Vaultwarden data already exists
+      ansible.builtin.assert:
+        that:
+          - remote_vw_data.matched | int == 0
+        fail_msg: >-
+          Local ./vw-data exists, but {{ data_dir }} on the server is not empty.
+          To avoid overwriting an existing Vaultwarden database, back up and
+          reconcile the remote data before running this migration.
+      when: local_vw_data.stat.exists and local_vw_data.stat.isdir
+
+    - name: Copy local vw-data into the new remote Vaultwarden data directory
+      ansible.builtin.copy:
+        src: "{{ local_data_dir }}/"
+        dest: "{{ data_dir }}/"
+        owner: "{{ vaultwarden_uid }}"
+        group: "{{ vaultwarden_gid }}"
+        mode: preserve
+        directory_mode: "0750"
+      when: local_vw_data.stat.exists and local_vw_data.stat.isdir
+
+    - name: Report that local Vaultwarden data was migrated
+      ansible.builtin.debug:
+        msg: "Local ./vw-data was copied into {{ data_dir }} and will be used by the new Vaultwarden container."
+      when: local_vw_data.stat.exists and local_vw_data.stat.isdir
+
+    - name: Report that no local Vaultwarden data was found
+      ansible.builtin.debug:
+        msg: "There is no ./vw-data directory beside vaultwarden.yml. Continuing with a fresh Vaultwarden data directory."
+      when: not local_vw_data.stat.exists or not local_vw_data.stat.isdir
+
+    # - name: Install Docker Engine and Compose plugin if requested
+    #   ansible.builtin.apt:
+    #     name:
+    #       - docker.io
+    #       - docker-compose-v2
+    #     state: present
+    #     update_cache: true
+    #   when: install_docker_packages | bool
+
+    - name: Ensure Docker is enabled and running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create Vaultwarden secrets environment file
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          ADMIN_TOKEN='{{ admin_token }}'
+          SMTP_PASSWORD='{{ smtp_password }}'
+          SSO_CLIENT_ID='{{ sso_client_id }}'
+          SSO_CLIENT_SECRET='{{ sso_client_secret }}'
+      no_log: true
+
+    - name: Create Vaultwarden Docker Compose file
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/docker-compose.yaml"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          services:
+            vaultwarden:
+              image: {{ vaultwarden_image | to_json }}
+              container_name: vaultwarden
+              user: "{{ vaultwarden_uid }}:{{ vaultwarden_gid }}"
+              restart: unless-stopped
+
+              env_file:
+                - .env
+                
+              ports:
+                - "{{ vaultwarden_private_ip }}:{{ host_http_port }}:{{ container_http_port }}"
+              environment:
+                DOMAIN: {{ ('https://' ~ vaultwarden_domain) | to_json }}
+                SIGNUPS_ALLOWED: {{ signups_allowed | to_json }}
+                SHOW_PASSWORD_HINT: "false"
+                INVITATIONS_ALLOWED: {{ invitations_allowed | to_json }}
+                ENABLE_WEBSOCKET: {{ enable_websocket | to_json }}
+                LOG_FILE: "/data/vaultwarden.log"
+                EXTENDED_LOGGING: "true"
+                USE_SYSLOG: "true"
+                SMTP_HOST: {{ smtp_host | to_json }}
+                SMTP_PORT: {{ smtp_port | to_json }}
+                SMTP_SECURITY: {{ smtp_security | to_json }}
+                SMTP_FROM: {{ smtp_from | to_json }}
+                SMTP_FROM_NAME: {{ smtp_from_name | to_json }}
+                SMTP_USERNAME: {{ smtp_username | to_json }}
+                SSO_ENABLED: {{ sso_enabled | to_json }}
+                SSO_ONLY: {{ sso_only | to_json }}
+                SSO_SIGNUPS_ALLOWED: {{ sso_signups_allowed | to_json }}
+                SSO_SIGNUPS_MATCH_EMAIL: {{ sso_signups_match_email | to_json }}
+                SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION: {{ sso_allow_unknown_email_verification | to_json }}
+                SSO_AUTHORITY: {{ sso_authority | to_json }}
+                SSO_SCOPES: {{ sso_scopes | to_json }}
+              volumes:
+                - "{{ data_dir }}:/data"
+                - /dev/log:/dev/log
+              networks:
+                - vaultwarden-network
+
+          networks:
+            vaultwarden-network:
+              driver: bridge
+
+    - name: Validate Docker Compose configuration
+      ansible.builtin.command:
+        cmd: docker compose config --quiet
+        chdir: "{{ deployment_dir }}"
+      changed_when: false
+      no_log: true
+
+    - name: Start or update Vaultwarden container
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ deployment_dir }}"
+      register: compose_up
+      no_log: true
+      changed_when: >-
+        'Creating' in compose_up.stdout or
+        'Recreating' in compose_up.stdout or
+        'Starting' in compose_up.stdout or
+        'Pulling' in compose_up.stdout or
+        'Created' in compose_up.stdout or
+        'Started' in compose_up.stdout
+
+    - name: Wait for Vaultwarden HTTP endpoint on the host
+      ansible.builtin.uri:
+        url: "http://{{ vaultwarden_private_ip }}:{{ host_http_port }}/"
+        method: GET
+        status_code: [200, 301, 302, 303, 307, 308]
+        return_content: false
+      register: vaultwarden_http
+      retries: 20
+      delay: 5
+      until: vaultwarden_http.status is defined and vaultwarden_http.status in [200, 301, 302, 303, 307, 308]
+
+    - name: Create Kubernetes namespace manifest
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/ns.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ vaultwarden_namespace }}
+
+    - name: Create Let's Encrypt ClusterIssuer manifest
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/issuer.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: {{ vaultwarden_cluster_issuer }}
+          spec:
+            acme:
+              email: {{ letsencrypt_email | to_json }}
+              server: {{ letsencrypt_server | to_json }}
+              privateKeySecretRef:
+                name: {{ vaultwarden_cluster_issuer }}-key
+              solvers:
+                - http01:
+                    ingress:
+                      ingressClassName: {{ vaultwarden_ingress_class }}
+
+    - name: Create Kubernetes Service and Endpoints manifest
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/vaultwarden-service.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: vaultwarden-external
+            namespace: {{ vaultwarden_namespace }}
+          spec:
+            ports:
+              - name: http
+                port: 80
+                targetPort: {{ host_http_port }}
+                protocol: TCP
+          ---
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: vaultwarden-external
+            namespace: {{ vaultwarden_namespace }}
+          subsets:
+            - addresses:
+                - ip: {{ vaultwarden_private_ip }}
+              ports:
+                - name: http
+                  port: {{ host_http_port }}
+                  protocol: TCP
+
+    - name: Create Kubernetes Ingress manifest
+      ansible.builtin.copy:
+        dest: "{{ deployment_dir }}/ingress.yaml"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: vaultwarden-ingress
+            namespace: {{ vaultwarden_namespace }}
+            annotations:
+              cert-manager.io/cluster-issuer: {{ vaultwarden_cluster_issuer }}
+          spec:
+            ingressClassName: {{ vaultwarden_ingress_class }}
+            tls:
+              - hosts:
+                  - {{ vaultwarden_domain }}
+                secretName: {{ vaultwarden_tls_secret }}
+            rules:
+              - host: {{ vaultwarden_domain }}
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: vaultwarden-external
+                          port:
+                            number: 80
+
+    - name: Apply namespace before namespaced resources
+      ansible.builtin.command:
+        cmd: microk8s kubectl apply -f {{ deployment_dir }}/ns.yaml
+      register: apply_namespace
+      changed_when: "'created' in apply_namespace.stdout or 'configured' in apply_namespace.stdout"
+
+    - name:
+      ansible.builtin.command:
+        cmd: microk8s kubectl apply -f {{ deployment_dir }}/issuer.yaml
+      register: apply_issuer
+      changed_when: "'created' in apply_issuer.stdout or 'configured' in apply_issuer.stdout"
+
+    - name: Apply Vaultwarden Service and Endpoints
+      ansible.builtin.command:
+        cmd: microk8s kubectl apply -f {{ deployment_dir }}/vaultwarden-service.yaml
+      register: apply_service
+      changed_when: "'created' in apply_service.stdout or 'configured' in apply_service.stdout"
+
+    - name: Apply Vaultwarden Ingress
+      ansible.builtin.command:
+        cmd: microk8s kubectl apply -f {{ deployment_dir }}/ingress.yaml
+      register: apply_ingress
+      changed_when: "'created' in apply_ingress.stdout or 'configured' in apply_ingress.stdout"
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Vaultwarden container is running and its host endpoint responded."
+          - "Docker endpoint: http://{{ vaultwarden_private_ip }}:{{ host_http_port }}"
+          - "Ingress URL: https://{{ vaultwarden_domain }}"
+          - "Kubernetes namespace: {{ vaultwarden_namespace }}"
+          - "Check certificate: microk8s kubectl get certificate -n {{ vaultwarden_namespace }}"

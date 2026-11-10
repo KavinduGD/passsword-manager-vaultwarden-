@@ -22,3 +22,25 @@ Setting up Fail2ban will prevent attackers to brute force your vault logins.
 Switch Your KDF to Argon2id
 
 - The number of hours after which an organization invite token, emergency access invite token,email verification token and deletion request token will expire (must be at least 1) = INVITATION_EXPIRATION_HOURS=120
+
+attachment encryption
+
+### does user deletion by admin delete his data
+
+- Account recovery administration (only available if mail is enabled) https://bitwarden.com/help/policies/#account-recovery-administration
+
+- what happen when user lost their 2 factor auth device
+
+- Emergency access
+
+- change algoritham from, user settings argo2
+
+- add 2 factor authentication , recovery code
+
+- SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION: "false"
+
+- need a good smtp
+
+- log file remove? storage problem
+
+- enforce https

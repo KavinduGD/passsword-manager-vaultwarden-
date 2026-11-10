@@ -4,11 +4,14 @@
 set -Eeuo pipefail
 
 # Configuration
-SOURCE_DIR="$HOME/vaultwarden/vw-data"
-BACKUP_DIR="$HOME/vaultwarden/backups"
+SOURCE_DIR="/opt/vaultwarden/vw-data"
+BACKUP_DIR="/opt/vaultwarden/backups"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 
 DEST_DIR="$BACKUP_DIR/$TIMESTAMP"
+
+# Restrict backup permissions
+umask 077
 
 echo "======================================"
 echo " Starting Vaultwarden Backup"
@@ -22,7 +25,13 @@ fi
 
 # Check source directory
 if [ ! -d "$SOURCE_DIR" ]; then
-    echo "ERROR: Source directory does not exist."
+    echo "ERROR: Source directory does not exist: $SOURCE_DIR"
+    exit 1
+fi
+
+# Check database
+if [ ! -f "$SOURCE_DIR/db.sqlite3" ]; then
+    echo "ERROR: Vaultwarden database not found."
     exit 1
 fi
 
@@ -36,13 +45,19 @@ sqlite3 "$SOURCE_DIR/db.sqlite3" ".backup '$DEST_DIR/db.sqlite3'"
 
 echo "[2/3] Copying attachments and sends..."
 
-cp -a "$SOURCE_DIR/attachments" "$DEST_DIR/"
-cp -a "$SOURCE_DIR/sends" "$DEST_DIR/"
+for item in attachments sends; do
+    if [ -e "$SOURCE_DIR/$item" ]; then
+        cp -a "$SOURCE_DIR/$item" "$DEST_DIR/"
+    fi
+done
 
 echo "[3/3] Copying configuration and RSA key..."
 
-cp -a "$SOURCE_DIR/config.json" "$DEST_DIR/"
-cp -a "$SOURCE_DIR/rsa_key.pem" "$DEST_DIR/"
+for item in config.json rsa_key.pem; do
+    if [ -f "$SOURCE_DIR/$item" ]; then
+        cp -a "$SOURCE_DIR/$item" "$DEST_DIR/"
+    fi
+done
 
 echo "======================================"
 echo " Backup completed successfully!"

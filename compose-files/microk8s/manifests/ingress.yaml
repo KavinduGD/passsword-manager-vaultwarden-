@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vaultwarden-ingress
+  namespace: vaultwarden
+
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-issuer
+
+spec:
+  ingressClassName: public
+
+  tls:
+    - hosts:
+        - vault.sri-lankan-parliment-shooter-mini-game.website
+      secretName: vaultwarden-tls
+
+  rules:
+    - host: vault.sri-lankan-parliment-shooter-mini-game.website
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vaultwarden-external
+                port:
+                  number: 80

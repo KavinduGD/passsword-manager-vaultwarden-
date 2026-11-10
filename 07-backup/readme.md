@@ -40,7 +40,7 @@ Make sure you document the procedure and locations where backups are stored!
 ### The sends dir
 
 - **Backup optional**
-- Backup optional.
+- Unlike regular attachments, Send attachments are intended to be ephemeral. Therefore, you might choose not to back up this directory if you want to minimize the size of your backups.
 
 ### The config.json file
 
@@ -61,3 +61,5 @@ Make sure you document the procedure and locations where backups are stored!
 ## Restoring backup data
 
 - Make sure vaultwarden is stopped, and then simply replace each file or directory in the data dir with its backed up version.
+
+url: https://github.com/dani-garcia/vaultwarden/wiki/Backing-up-your-vault
