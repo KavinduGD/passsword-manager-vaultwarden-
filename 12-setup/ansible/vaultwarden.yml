@@ -349,11 +349,36 @@
       register: apply_namespace
       changed_when: "'created' in apply_namespace.stdout or 'configured' in apply_namespace.stdout"
 
-    - name:
+    - name: Wait for cert-manager components
       ansible.builtin.command:
-        cmd: microk8s kubectl apply -f {{ deployment_dir }}/issuer.yaml
-      register: apply_issuer
-      changed_when: "'created' in apply_issuer.stdout or 'configured' in apply_issuer.stdout"
+        cmd: >
+          microk8s kubectl rollout status
+          deployment/{{ item }}
+          -n cert-manager
+          --timeout=120s
+      loop:
+        - cert-manager
+        - cert-manager-cainjector
+        - cert-manager-webhook
+      changed_when: false
+
+    # - name:
+    #   ansible.builtin.command:
+    #     cmd: microk8s kubectl apply -f {{ deployment_dir }}/issuer.yaml
+    #   register: apply_issuer
+    #   changed_when: "'created' in apply_issuer.stdout or 'configured' in apply_issuer.stdout"
+    - name: Wait for cert-manager components
+      ansible.builtin.command:
+        cmd: >
+          microk8s kubectl rollout status
+          deployment/{{ item }}
+          -n cert-manager
+          --timeout=120s
+      loop:
+        - cert-manager
+        - cert-manager-cainjector
+        - cert-manager-webhook
+      changed_when: false
 
     - name: Apply Vaultwarden Service and Endpoints
       ansible.builtin.command:
